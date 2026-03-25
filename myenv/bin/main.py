@@ -71,6 +71,32 @@ def extreure_estructura_java(codi_java: str) -> str:
         # Si el codi de l'alumne té errors de sintaxi greus que impedeixen llegir-lo
         return ""
 
+def extreure_zips_recursivament(directori_base: str):
+    """
+    Busca arxius .zip dins de les subcarpetes, els descomprimeix a la mateixa 
+    carpeta on es troben, i esborra el .zip original per evitar bucles.
+    """
+    arxius_zip_pendents = True
+    
+    while arxius_zip_pendents:
+        arxius_zip_pendents = False
+        
+        # Busquem qualsevol .zip que hi hagi dins de qualsevol subcarpeta
+        for ruta_zip in Path(directori_base).rglob('*.zip'):
+            try:
+                carpeta_desti = ruta_zip.parent # Ho extraiem a la seva pròpia carpeta
+                with zipfile.ZipFile(ruta_zip, 'r') as zip_ref:
+                    zip_ref.extractall(carpeta_desti)
+                
+                # Un cop descomprimit, eliminem l'arxiu .zip intern
+                os.remove(ruta_zip)
+                
+                # Com que hem extret coses noves, potser a dins hi havia UN ALTRE zip
+                arxius_zip_pendents = True 
+                
+            except Exception as e:
+                print(f"⚠️ Error al descomprimir l'arxiu intern {ruta_zip.name}: {e}")
+
 def calcular_similitud(codi1: str, codi2: str) -> float:
     """Retorna un percentatge de similitud (0.0 a 1.0) entre dos codis."""
     est1 = extreure_estructura_java(codi1)
@@ -96,6 +122,8 @@ def processar_arxiu_zip(file_path: str, task_id: str):
         with zipfile.ZipFile(file_path, 'r') as zip_ref:
             zip_ref.extractall(extract_dir)
         print(f"[Tasca {task_id}] Arxiu descomprimit correctament.")
+        # NOU PAS: Descomprimim qualsevol sub-zip que els alumnes hagin posat a dins
+        extreure_zips_recursivament(extract_dir)
     except zipfile.BadZipFile:
         print(f"[Tasca {task_id}] Error: L'arxiu no és un ZIP vàlid.")
         return # Parem aquí si falla
