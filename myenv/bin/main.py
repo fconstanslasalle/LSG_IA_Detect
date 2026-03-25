@@ -2,6 +2,8 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
 import shutil
 import os
 import uuid
+import zipfile
+from pathlib import Path
 
 app = FastAPI(title="Analitzador de Projectes Java")
 
@@ -10,47 +12,58 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 def processar_arxiu_zip(file_path: str, task_id: str):
-    """
-    Aquesta funció s'executarà en segon pla.
-    Aquí és on posarem la lògica de descomprimir i analitzar el codi Java.
-    """
     print(f"[Tasca {task_id}] Iniciant el processament de: {file_path}")
     
-    # TODO: 1. Descomprimir el ZIP.
-    # TODO: 2. Buscar indicis d'IA i plagi.
-    # TODO: 3. Guardar els resultats a la base de dades.
-    # TODO: 4. Netejar (esborrar) els arxius temporals.
+    # Creem una carpeta temporal única per a aquesta extracció
+    extract_dir = os.path.join(UPLOAD_DIR, f"extracted_{task_id}")
+    os.makedirs(extract_dir, exist_ok=True)
     
-    print(f"[Tasca {task_id}] Processament finalitzat.")
-
-@app.post("/upload-zip/")
-async def upload_zip(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    # 1. Validació: Comprovar que és un arxiu .zip
-    if not file.filename.endswith('.zip'):
-        raise HTTPException(status_code=400, detail="L'arxiu ha de ser un .zip")
-
-    # 2. Generar un ID únic per aquesta tasca/pujada
-    task_id = str(uuid.uuid4())
-    file_path = os.path.join(UPLOAD_DIR, f"{task_id}_{file.filename}")
-
-    # 3. Guardar l'arxiu al disc dur del servidor
+    # 1. Descomprimir el ZIP
     try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al guardar l'arxiu: {str(e)}")
-    finally:
-        file.file.close()
+        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
+        print(f"[Tasca {task_id}] Arxiu descomprimit correctament.")
+    except zipfile.BadZipFile:
+        print(f"[Tasca {task_id}] Error: L'arxiu no és un ZIP vàlid.")
+        return # Parem aquí si falla
 
-    # 4. Enviar la tasca d'anàlisi a segon pla
-    background_tasks.add_task(processar_arxiu_zip, file_path, task_id)
+    # 2. Llegir els arxius .java i agrupar-los per alumne
+    # Guardarem les dades així: { "Carpeta_Alumne_1": ["codi_arxiu1", "codi_arxiu2"] }
+    alumnes_codi = {} 
+    
+    ruta_base = Path(extract_dir)
+    
+    # rglob('*.java') busca tots els arxius Java a qualsevol subcarpeta recursivament
+    for arxiu_java in ruta_base.rglob('*.java'): 
+        # Extraiem el nom de la carpeta principal (que assumim és el nom de l'alumne)
+        parts_ruta = arxiu_java.relative_to(ruta_base).parts
+        if len(parts_ruta) > 0:
+            nom_alumne = parts_ruta[0]
+            
+            if nom_alumne not in alumnes_codi:
+                alumnes_codi[nom_alumne] = []
+                
+            # Llegim el codi font
+            try:
+                with open(arxiu_java, 'r', encoding='utf-8') as f:
+                    contingut = f.read()
+                    alumnes_codi[nom_alumne].append(contingut)
+            except UnicodeDecodeError:
+                # Pla B per si algun alumne guarda en un altre format (com Windows-1252)
+                with open(arxiu_java, 'r', encoding='latin-1') as f:
+                    contingut = f.read()
+                    alumnes_codi[nom_alumne].append(contingut)
 
-    # 5. Retornar una resposta ràpida al Frontend
-    return {
-        "missatge": "Arxiu rebut correctament. L'anàlisi ha començat.",
-        "task_id": task_id,
-        "arxiu": file.filename
-    }
+    print(f"[Tasca {task_id}] S'han processat els projectes de {len(alumnes_codi)} alumnes.")
+    
+    # Aquí ja tenim tot el codi de la classe a la memòria, llest per analitzar!
+    # TODO: 3. Buscar indicis d'IA (Heurística).
+    # TODO: 4. Cercar plagi (Comparació AST).
+    
+    # 5. Neteja: Esborrem els arxius temporals per no omplir el disc
+    shutil.rmtree(extract_dir)
+    os.remove(file_path)
+    print(f"[Tasca {task_id}] Neteja d'arxius temporals completada.")
 
 # Endpoint de prova per comprovar que l'API funciona
 @app.get("/")
