@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analitzador de Projectes Java</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-8 font-sans">
+
+    <div class="max-w-3xl mx-auto bg-white p-6 rounded-lg shadow-md">
+        <h1 class="text-2xl font-bold text-gray-800 mb-4">🔍 Analitzador de Codi Java</h1>
+        <p class="text-gray-600 mb-6">Puja un arxiu .zip amb les carpetes dels teus alumnes per analitzar-ne el plagi.</p>
+
+        <div class="mb-6">
+            <input type="file" id="arxiuZip" accept=".zip" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+            <button onclick="pujarArxiu()" class="mt-4 bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 transition">
+                Analitzar Arxiu
+            </button>
+        </div>
+
+        <div id="estatDiv" class="hidden p-4 mb-6 text-sm text-blue-800 rounded-lg bg-blue-50" role="alert">
+            <span class="font-medium">Estat:</span> <span id="textEstat">Processant...</span>
+        </div>
+
+        <div id="resultatsDiv" class="hidden">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">🚨 Resultats de Plagi</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-left text-sm whitespace-nowrap">
+                    <thead class="uppercase tracking-wider border-b-2 border-gray-200 bg-gray-50 text-gray-600">
+                        <tr>
+                            <th class="px-6 py-3 border-x">Alumne A</th>
+                            <th class="px-6 py-3 border-x">Alumne B</th>
+                            <th class="px-6 py-3 border-x">Similitud</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cosTaula">
+                        </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = "http://127.0.0.1:8000";
+        let intervalConsulta = null;
+
+        async function pujarArxiu() {
+            const inputArxiu = document.getElementById('arxiuZip');
+            if (inputArxiu.files.length === 0) {
+                alert("Si us plau, selecciona un arxiu .zip primer.");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append("file", inputArxiu.files[0]);
+
+            // Mostrem la caixa d'estat i amaguem la taula per si hi havia dades d'abans
+            document.getElementById('estatDiv').classList.remove('hidden');
+            document.getElementById('resultatsDiv').classList.add('hidden');
+            document.getElementById('textEstat').innerText = "Pujant l'arxiu al servidor...";
+
+            try {
+                // Fem la petició POST al Backend
+                const resposta = await fetch(`${API_URL}/upload-zip/`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const dades = await resposta.json();
+
+                if (resposta.ok) {
+                    document.getElementById('textEstat').innerText = "Arxiu rebut. Analitzant el codi... (això pot trigar uns segons)";
+                    // Iniciem la consulta periòdica (cada 2 segons)
+                    intervalConsulta = setInterval(() => consultarResultats(dades.task_id), 2000);
+                } else {
+                    document.getElementById('textEstat').innerText = `Error: ${dades.detail}`;
+                }
+            } catch (error) {
+                document.getElementById('textEstat').innerText = "Error de connexió amb el servidor.";
+            }
+        }
+
+        async function consultarResultats(taskId) {
+            try {
+                const resposta = await fetch(`${API_URL}/resultats/${taskId}`);
+                const dades = await resposta.json();
+
+                if (dades.estat === "completat") {
+                    // Parem de preguntar al servidor
+                    clearInterval(intervalConsulta);
+                    document.getElementById('estatDiv').classList.add('hidden');
+                    mostrarResultats(dades.alertes_plagi);
+                }
+            } catch (error) {
+                console.error("Error al consultar l'estat", error);
+            }
+        }
+
+        function mostrarResultats(alertes) {
+            document.getElementById('resultatsDiv').classList.remove('hidden');
+            const cosTaula = document.getElementById('cosTaula');
+            cosTaula.innerHTML = ""; // Netegem la taula
+
+            if (alertes.length === 0) {
+                cosTaula.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-green-600">No s'han trobat similituds altes. Bon treball!</td></tr>`;
+                return;
+            }
+
+            alertes.forEach(alerta => {
+                // Marquem en vermell els casos molt clars de plagi (més del 90%)
+                const colorFons = alerta.similitud > 90 ? "bg-red-100 text-red-800 font-bold" : "bg-yellow-50 text-yellow-800";
+                
+                const fila = `
+                    <tr class="border-b border-gray-200 hover:bg-gray-50">
+                        <td class="px-6 py-4">${alerta.alumne_A}</td>
+                        <td class="px-6 py-4">${alerta.alumne_B}</td>
+                        <td class="px-6 py-4 ${colorFons}">${alerta.similitud}%</td>
+                    </tr>
+                `;
+                cosTaula.innerHTML += fila;
+            });
+        }
+    </script>
+</body>
+</html>
