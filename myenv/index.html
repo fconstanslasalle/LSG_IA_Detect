@@ -3,81 +3,152 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Analitzador de Projectes Java</title>
+    <title>Analitzador de Projectes Java - Professional</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/diff_match_patch/20121119/diff_match_patch.js"></script>
+    <style>
+        /* Estils per pintar el codi de la comparació */
+        .diff-inserit { background-color: #e6fffa; color: #0d6832; text-decoration: none; } /* Verd claret per línies iguals/noves */
+        .diff-esborrat { background-color: #ffeef0; color: #b52a3a; text-decoration: line-through; } /* Vermell claret per diferències */
+        pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 13px; tab-size: 4; }
+    </style>
 </head>
-<body class="bg-gray-100 p-8 font-sans">
+<body class="bg-gray-100 p-4 md:p-8 font-sans">
 
-    <div class="max-w-3xl mx-auto bg-white p-6 rounded-lg shadow-md">
-        <h1 class="text-2xl font-bold text-gray-800 mb-4">🔍 Analitzador de Codi Java</h1>
-        <p class="text-gray-600 mb-6">Puja un arxiu .zip amb les carpetes dels teus alumnes per analitzar-ne el plagi.</p>
+    <div class="max-w-7xl mx-auto bg-white p-6 rounded-xl shadow-lg border border-gray-200">
+        <header class="mb-8 border-b pb-6">
+            <h1 class="text-3xl font-bold text-gray-900 mb-2">🔍 Analitzador Professional de Codi Java</h1>
+            <p class="text-gray-600 text-lg">Puja un ZIP amb les entregues. Detectem plagi estructural entre alumnes i indicis d'IA.</p>
+        </header>
 
-        <div class="mb-6">
-            <input type="file" id="arxiuZip" accept=".zip" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
-            <button onclick="pujarArxiu()" class="mt-4 bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 transition">
-                Analitzar Arxiu
+        <div class="mb-8 bg-gray-50 p-6 rounded-lg border-2 border-dashed border-gray-300 text-center">
+            <div class="mb-4 text-left max-w-sm mx-auto">
+                <label class="block text-gray-700 font-semibold mb-2" for="llenguatgeSelect">Llenguatge del projecte:</label>
+                <select id="llenguatgeSelect" class="block w-full border border-gray-300 rounded-lg p-2.5 bg-white text-gray-700 focus:ring-blue-500 focus:border-blue-500">
+                    <option value="Java">☕ Java</option>
+                    <option value="PHP">🐘 PHP</option>
+                    <option value="HTML/CSS">🌐 HTML / CSS</option>
+                </select>
+            </div>
+            <input type="file" id="arxiuZip" accept=".zip" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2.5 file:px-5 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer">
+            <button onclick="pujarArxiu()" class="mt-5 bg-blue-600 text-white font-semibold py-2.5 px-6 rounded-lg hover:bg-blue-700 transition shadow-sm">
+                Començar Anàlisi Completa
             </button>
         </div>
 
-        <div id="estatDiv" class="hidden p-4 mb-6 text-sm text-blue-800 rounded-lg bg-blue-50" role="alert">
-            <span class="font-medium">Estat:</span> <span id="textEstat">Processant...</span>
+        <div id="estatDiv" class="hidden p-4 mb-8 text-sm text-blue-800 rounded-lg bg-blue-100 border border-blue-200 shadow-inner" role="alert">
+            <div class="flex items-center">
+                <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-blue-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                <span class="font-medium">Estat de la Tasca:</span> &nbsp; <span id="textEstat">Processant...</span>
+            </div>
         </div>
 
-        <div id="resultatsDiv" class="hidden">
-            <h2 class="text-xl font-bold text-gray-800 mb-4">🚨 Resultats de Plagi</h2>
-            <div class="overflow-x-auto">
-                <table class="min-w-full text-left text-sm whitespace-nowrap">
-                    <thead class="uppercase tracking-wider border-b-2 border-gray-200 bg-gray-50 text-gray-600">
-                        <tr>
-                            <th class="px-6 py-3 border-x">Alumne A</th>
-                            <th class="px-6 py-3 border-x">Alumne B</th>
-                            <th class="px-6 py-3 border-x">Similitud</th>
-                        </tr>
-                    </thead>
-                    <tbody id="cosTaula">
-                        </tbody>
-                </table>
+        <div id="resultatsDiv" class="hidden space-y-10">
+            
+            <section>
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4 flex items-center gap-2">🤖 Indicis d'ús d'IA</h2>
+                <div class="overflow-x-auto border rounded-xl shadow-sm bg-white">
+                    <table class="min-w-full text-left text-sm">
+                        <thead class="uppercase tracking-wider border-b border-gray-200 bg-gray-50 text-gray-600 font-medium">
+                            <tr>
+                                <th class="px-6 py-4 border-x">Alumne</th>
+                                <th class="px-6 py-4 border-x">Motiu / Indici Detectat</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cosTaulaIA" class="divide-y divide-gray-100"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section>
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4 flex items-center gap-2">🚨 Altes Similituds entre Alumnes</h2>
+                <div class="overflow-x-auto border rounded-xl shadow-sm bg-white">
+                    <table class="min-w-full text-left text-sm">
+                        <thead class="uppercase tracking-wider border-b border-gray-200 bg-gray-50 text-gray-600 font-medium">
+                            <tr>
+                                <th class="px-6 py-4 border-x">Alumne A</th>
+                                <th class="px-6 py-4 border-x">Alumne B</th>
+                                <th class="px-6 py-4 border-x">Similitud</th>
+                                <th class="px-6 py-4 border-x text-center">Accions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cosTaulaPlagi" class="divide-y divide-gray-100"></tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <div id="modalComparacio" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 z-50 overflow-y-auto p-4 md:p-10" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            
+            <div class="inline-block align-bottom bg-white rounded-xl text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle w-full max-w-7xl">
+                
+                <div class="bg-gray-50 px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                    <h3 class="text-xl font-bold text-gray-900" id="titolModal">Comparació de Codi</h3>
+                    <button onclick="tancarModal()" class="text-gray-400 hover:text-gray-600 transition text-2xl font-bold">&times;</button>
+                </div>
+
+                <div class="bg-white px-6 py-6">
+                    <div id="carregantComparacio" class="text-center py-10 text-gray-500">Carregant codi original i calculant diferències...</div>
+                    
+                    <div id="contingutComparacio" class="hidden grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="border rounded-lg overflow-hidden">
+                            <div id="nomAlumneA" class="bg-gray-100 px-4 py-2 border-b font-semibold text-gray-800 text-center">Alumne A</div>
+                            <div class="p-4 overflow-auto max-h-[70vh]">
+                                <pre id="codiVisualA" class="whitespace-pre-wrap"></pre>
+                            </div>
+                        </div>
+                        <div class="border rounded-lg overflow-hidden">
+                            <div id="nomAlumneB" class="bg-gray-100 px-4 py-2 border-b font-semibold text-gray-800 text-center">Alumne B</div>
+                            <div class="p-4 overflow-auto max-h-[70vh]">
+                                <pre id="codiVisualB" class="whitespace-pre-wrap"></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-gray-50 px-6 py-4 border-t border-gray-200 text-right">
+                    <button onclick="tancarModal()" class="bg-white border border-gray-300 text-gray-700 font-semibold py-2 px-5 rounded-lg hover:bg-gray-50 transition shadow-sm">
+                        Tancar Finestra
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 
+
     <script>
         const API_URL = "http://127.0.0.1:8000";
         let intervalConsulta = null;
+        let currentTaskId = null; // Guardem l'ID de la tasca actual
+
+        // Llibreria Diff Match Patch
+        const dmp = new diff_match_patch();
 
         async function pujarArxiu() {
             const inputArxiu = document.getElementById('arxiuZip');
-            if (inputArxiu.files.length === 0) {
-                alert("Si us plau, selecciona un arxiu .zip primer.");
-                return;
-            }
+            if (inputArxiu.files.length === 0) { alert("Si us plau, selecciona un .zip."); return; }
 
             const formData = new FormData();
             formData.append("file", inputArxiu.files[0]);
 
-            // Mostrem la caixa d'estat i amaguem la taula per si hi havia dades d'abans
             document.getElementById('estatDiv').classList.remove('hidden');
             document.getElementById('resultatsDiv').classList.add('hidden');
-            document.getElementById('textEstat').innerText = "Pujant l'arxiu al servidor...";
+            document.getElementById('textEstat').innerText = "Pujant l'arxiu i inicialitzant l'anàlisi...";
 
             try {
-                // Fem la petició POST al Backend
-                const resposta = await fetch(`${API_URL}/upload-zip/`, {
-                    method: 'POST',
-                    body: formData
-                });
+                const resposta = await fetch(`${API_URL}/upload-zip/`, { method: 'POST', body: formData });
                 const dades = await resposta.json();
 
                 if (resposta.ok) {
-                    document.getElementById('textEstat').innerText = "Arxiu rebut. Analitzant el codi... (això pot trigar uns segons)";
-                    // Iniciem la consulta periòdica (cada 2 segons)
-                    intervalConsulta = setInterval(() => consultarResultats(dades.task_id), 2000);
+                    currentTaskId = dades.task_id; // Guardem l'ID per usar-lo després
+                    document.getElementById('textEstat').innerText = "Analitzant codi estructural (Plagi) i heurístiques d'IA...";
+                    intervalConsulta = setInterval(() => consultarResultats(currentTaskId), 2500);
                 } else {
                     document.getElementById('textEstat').innerText = `Error: ${dades.detail}`;
                 }
-            } catch (error) {
-                document.getElementById('textEstat').innerText = "Error de connexió amb el servidor.";
-            }
+            } catch (error) { document.getElementById('textEstat').innerText = "Error de connexió amb el servidor."; }
         }
 
         async function consultarResultats(taskId) {
@@ -86,40 +157,138 @@
                 const dades = await resposta.json();
 
                 if (dades.estat === "completat") {
-                    // Parem de preguntar al servidor
                     clearInterval(intervalConsulta);
                     document.getElementById('estatDiv').classList.add('hidden');
-                    mostrarResultats(dades.alertes_plagi);
+                    mostrarResultats(dades);
                 }
-            } catch (error) {
-                console.error("Error al consultar l'estat", error);
-            }
+            } catch (error) { console.error("Error consultant resultats", error); }
         }
 
-        function mostrarResultats(alertes) {
+        function mostrarResultats(dades) {
             document.getElementById('resultatsDiv').classList.remove('hidden');
-            const cosTaula = document.getElementById('cosTaula');
-            cosTaula.innerHTML = ""; // Netegem la taula
-
-            if (alertes.length === 0) {
-                cosTaula.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-green-600">No s'han trobat similituds altes. Bon treball!</td></tr>`;
-                return;
+            
+            // --- OMPLIR TAULA D'IA ---
+            const cosTaulaIA = document.getElementById('cosTaulaIA');
+            cosTaulaIA.innerHTML = "";
+            if (dades.alertes_ia.length === 0) {
+                cosTaulaIA.innerHTML = `<tr><td colspan="2" class="px-6 py-8 text-center text-green-600 bg-green-50">🎉 No s'han detectat indicis clars d'IA.</td></tr>`;
+            } else {
+                dades.alertes_ia.forEach(alerta => {
+                    const fila = `
+                        <tr class="hover:bg-red-50 transition">
+                            <td class="px-6 py-4 font-semibold text-gray-900 border-x">${alerta.alumne}</td>
+                            <td class="px-6 py-4 text-red-700 border-x flex items-center gap-2">
+                                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path></svg>
+                                ${alerta.motiu}
+                            </td>
+                        </tr>`;
+                    cosTaulaIA.innerHTML += fila;
+                });
             }
 
-            alertes.forEach(alerta => {
-                // Marquem en vermell els casos molt clars de plagi (més del 90%)
-                const colorFons = alerta.similitud > 90 ? "bg-red-100 text-red-800 font-bold" : "bg-yellow-50 text-yellow-800";
-                
-                const fila = `
-                    <tr class="border-b border-gray-200 hover:bg-gray-50">
-                        <td class="px-6 py-4">${alerta.alumne_A}</td>
-                        <td class="px-6 py-4">${alerta.alumne_B}</td>
-                        <td class="px-6 py-4 ${colorFons}">${alerta.similitud}%</td>
-                    </tr>
-                `;
-                cosTaula.innerHTML += fila;
-            });
+            // --- OMPLIR TAULA DE PLAGI ---
+            const cosTaulaPlagi = document.getElementById('cosTaulaPlagi');
+            cosTaulaPlagi.innerHTML = "";
+            if (dades.alertes_plagi.length === 0) {
+                cosTaulaPlagi.innerHTML = `<tr><td colspan="4" class="px-6 py-8 text-center text-green-600 bg-green-50">🎉 No s'han trobat similituds estructurals altes. Bon treball!</td></tr>`;
+            } else {
+                dades.alertes_plagi.forEach(alerta => {
+                    const esCritic = alerta.similitud > 90;
+                    const colorSimilitud = esCritic ? "text-red-700 font-bold" : "text-yellow-800 font-semibold";
+                    const fila = `
+                        <tr class="hover:bg-gray-50 transition">
+                            <td class="px-6 py-4 font-medium text-gray-800 border-x">${alerta.alumne_A}</td>
+                            <td class="px-6 py-4 font-medium text-gray-800 border-x">${alerta.alumne_B}</td>
+                            <td class="px-6 py-4 border-x ${colorSimilitud}">${alerta.similitud}%</td>
+                            <td class="px-6 py-4 border-x text-center">
+                                <button onclick="obrirComparacio('${alerta.alumne_A}', '${alerta.alumne_B}')" class="text-xs bg-gray-800 text-white py-1.5 px-3 rounded hover:bg-gray-700 transition flex items-center gap-1.5 mx-auto shadow-sm">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
+                                    Veure Codi Side-by-Side
+                                </button>
+                            </td>
+                        </tr>`;
+                    cosTaulaPlagi.innerHTML += fila;
+                });
+            }
         }
+
+        // --- NOU: FUNCIONS PER LA VENTANA EMERGENT (MODAL) ---
+
+        function tancarModal() {
+            document.getElementById('modalComparacio').classList.add('hidden');
+            // Netegem el contingut per quan s'obri la següent
+            document.getElementById('codiVisualA').innerHTML = "";
+            document.getElementById('codiVisualB').innerHTML = "";
+        }
+
+        async function obrirComparacio(alumneA, alumneB) {
+            // Mostrem el modal buit i el text de "carregant"
+            document.getElementById('modalComparacio').classList.remove('hidden');
+            document.getElementById('carregantComparacio').classList.remove('hidden');
+            document.getElementById('contingutComparacio').classList.add('hidden');
+            document.getElementById('titolModal').innerText = `Comparant Codi Original: ${alumneA} vs ${alumneB}`;
+            document.getElementById('nomAlumneA').innerText = alumneA;
+            document.getElementById('nomAlumneB').innerText = alumneB;
+
+            try {
+                // Demanem el codi font original al Backend (el nou endpoint que vam fer)
+                // Construïm els paràmetres de forma 100% segura
+                const params = new URLSearchParams({
+                    task_id: currentTaskId,
+                    alumne_a: alumneA,
+                    alumne_b: alumneB
+                });
+
+                // Fem la petició amb el nou format
+                const resposta = await fetch(`${API_URL}/comparar/?${params.toString()}`);
+                const dades = await resposta.json();
+
+                if (!resposta.ok) { throw new Error(dades.detail); }
+
+                // Calculem les diferències Side-by-Side i les pintem
+                generarVisualitzacioDiff(dades.codi_A, dades.codi_B);
+
+                // Mostrem el contingut final
+                document.getElementById('carregantComparacio').classList.add('hidden');
+                document.getElementById('contingutComparacio').classList.remove('hidden');
+
+            } catch (error) {
+                alert(`Error al carregar la comparació: ${error.message}`);
+                tancarModal();
+            }
+        }
+
+        function generarVisualitzacioDiff(codiA, codiB) {
+            // dmp.diff_main calcula la llista de canvis entre text 1 i text 2
+            const diffs = dmp.diff_main(codiA, codiB);
+            
+            // Millora la lectura eliminant diferències d'un sol caràcter inútils
+            dmp.diff_cleanupSemantic(diffs);
+
+            let htmlA = ""; // Codi de l'esquerra (Alumne A)
+            let htmlB = ""; // Codi de la dreta (Alumne B)
+
+            // Iterem sobre la llista de canvis per construir el HTML
+            // Un canvi té format [tipus, text]. Tipus: 0 (igual), 1 (inserit a textB), -1 (esborrat de textA)
+            diffs.forEach(part => {
+                const tipus = part[0];
+                const text = part[1].replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+
+                if (tipus === 0) { // Text IGUAL als dos llocs
+                    htmlA += text;
+                    htmlB += text;
+                } else if (tipus === -1) { // Text que NOMÉS està a A (esborrat/diferent a B) -> Vermell a l'esquerra
+                    htmlA += `<span class="diff-esborrat">${text}</span>`;
+                } else if (tipus === 1) { // Text que NOMÉS està a B (inserit/diferent de A) -> Verd a la dreta
+                    htmlB += `<span class="diff-inserit">${text}</span>`;
+                }
+            });
+
+            // Pintem el HTML final als contenidors
+            document.getElementById('codiVisualA').innerHTML = htmlA;
+            document.getElementById('codiVisualB').innerHTML = htmlB;
+        }
+
     </script>
 </body>
 </html>

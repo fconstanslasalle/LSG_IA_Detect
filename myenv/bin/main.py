@@ -3,6 +3,7 @@ import shutil
 import os
 import uuid
 import zipfile
+import re
 from pathlib import Path
 import javalang
 from difflib import SequenceMatcher
@@ -45,6 +46,22 @@ class ResultatPlagi(Base):
     alumne_a = Column(String)
     alumne_b = Column(String)
     similitud = Column(Float)
+
+class AlertaIA(Base):
+    __tablename__ = "alertes_ia"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    tasca_id = Column(String, ForeignKey("tasques_analisi.id"))
+    alumne = Column(String)
+    motiu = Column(String) # Descripció del per què és sospitós
+
+class CodiAlumne(Base):
+    __tablename__ = "codi_alumnes"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    tasca_id = Column(String, ForeignKey("tasques_analisi.id"))
+    alumne = Column(String)
+    codi = Column(String) # Aquesta columna guardarà tot el text sencer
 
 # Creem les taules físicament a l'arxiu SQLite
 Base.metadata.create_all(bind=engine)
@@ -109,112 +126,134 @@ def calcular_similitud(codi1: str, codi2: str) -> float:
     # SequenceMatcher compara seqüències i ens dona el ratio de similitud
     return SequenceMatcher(None, est1, est2).ratio()
 
+def analitzar_indicis_ia(codi_java: str) -> list:
+    """
+    Analitza el codi d'un alumne buscant patrons sospitosos que indiquin
+    que ha fet copiar-enganxar directament d'una IA.
+    """
+    avisos = []
+    
+    # 1. Comentaris residuals de conversa
+    patrons_conversa = [
+        r"here is the (code|solution)",
+        r"certainly!?",
+        r"as an ai (language)? model",
+        r"aquí tienes (el código|la solución)",
+        r"por supuesto",
+        r"claro, aquí",
+        r"```java",  
+        r"espero que (te|esto) sirva"
+    ]
+    
+    for patro in patrons_conversa:
+        if re.search(patro, codi_java, re.IGNORECASE):
+            avisos.append("S'ha trobat llenguatge conversacional de xat bot als comentaris.")
+            break 
+
+    # 2. Ús de codi massa avançat pel nivell
+    llibreries_avancades = [
+        "java.util.stream",
+        "java.lang.reflect",
+        "java.util.concurrent",
+        "CompletableFuture",
+        "ExecutorService"
+    ]
+    
+    for lib in llibreries_avancades:
+        if lib in codi_java:
+            avisos.append(f"Ús de llibreries o estructures avançades inusuals: {lib}")
+            
+    # 3. Excés de Javadoc
+    linies = codi_java.split('\n')
+    total_linies = len(linies)
+    javadocs = codi_java.count("@param") + codi_java.count("@return")
+    
+    if total_linies > 0 and (javadocs / total_linies) > 0.05:
+        avisos.append("Densitat inusualment alta de documentació Javadoc.")
+
+    return avisos
 
 def processar_arxiu_zip(file_path: str, task_id: str):
     print(f"[Tasca {task_id}] Iniciant el processament de: {file_path}")
     
-    # Creem una carpeta temporal única per a aquesta extracció
     extract_dir = os.path.join(UPLOAD_DIR, f"extracted_{task_id}")
     os.makedirs(extract_dir, exist_ok=True)
     
-    # 1. Descomprimir el ZIP
+    db = SessionLocal() # Obrim la base de dades al principi
+    
     try:
+        # 1. Descomprimir
         with zipfile.ZipFile(file_path, 'r') as zip_ref:
             zip_ref.extractall(extract_dir)
-        print(f"[Tasca {task_id}] Arxiu descomprimit correctament.")
-        # NOU PAS: Descomprimim qualsevol sub-zip que els alumnes hagin posat a dins
-        extreure_zips_recursivament(extract_dir)
-    except zipfile.BadZipFile:
-        print(f"[Tasca {task_id}] Error: L'arxiu no és un ZIP vàlid.")
-        return # Parem aquí si falla
-
-    # 2. Llegir els arxius .java i agrupar-los per alumne
-    # Guardarem les dades així: { "Carpeta_Alumne_1": ["codi_arxiu1", "codi_arxiu2"] }
-    alumnes_codi = {} 
-    
-    ruta_base = Path(extract_dir)
-    
-    # rglob('*.java') busca tots els arxius Java a qualsevol subcarpeta recursivament
-    for arxiu_java in ruta_base.rglob('*.java'): 
-        # Extraiem el nom de la carpeta principal (que assumim és el nom de l'alumne)
-        parts_ruta = arxiu_java.relative_to(ruta_base).parts
-        if len(parts_ruta) > 0:
-            nom_alumne = parts_ruta[0]
             
-            if nom_alumne not in alumnes_codi:
-                alumnes_codi[nom_alumne] = []
-                
-            # Llegim el codi font
-            try:
-                with open(arxiu_java, 'r', encoding='utf-8') as f:
-                    contingut = f.read()
-                    alumnes_codi[nom_alumne].append(contingut)
-            except UnicodeDecodeError:
-                # Pla B per si algun alumne guarda en un altre format (com Windows-1252)
-                with open(arxiu_java, 'r', encoding='latin-1') as f:
-                    contingut = f.read()
-                    alumnes_codi[nom_alumne].append(contingut)
-
-    print(f"[Tasca {task_id}] S'han processat els projectes de {len(alumnes_codi)} alumnes.")
-    
-    # Aquí ja tenim tot el codi de la classe a la memòria, llest per analitzar!
-    # TODO: 3. Buscar indicis d'IA (Heurística).
-    # ... (Això va just després del bucle on llegim els arxius de cada alumne) ...
-    
-    print(f"[Tasca {task_id}] Iniciant l'anàlisi de plagi entre {len(alumnes_codi)} alumnes...")
-    
-    # Unim tot el codi de cada alumne en un sol text gran per avaluar el projecte sencer
-    codi_per_alumne = {}
-    for alumne, arxius in alumnes_codi.items():
-        codi_per_alumne[alumne] = "\n".join(arxius)
-
-    resultats_plagi = []
-    
-    # itertools.combinations crea totes les parelles possibles d'alumnes sense repetir
-    parelles = itertools.combinations(codi_per_alumne.keys(), 2)
-    
-    for alumne1, alumne2 in parelles:
-        similitud = calcular_similitud(codi_per_alumne[alumne1], codi_per_alumne[alumne2])
-        percentatge = round(similitud * 100, 2)
+        extreure_zips_recursivament(extract_dir)
         
-        # Només ens interessen les similituds altes (per exemple, més del 75%)
-        if percentatge > 75.0:
-            resultats_plagi.append({
-                "alumne_A": alumne1,
-                "alumne_B": alumne2,
-                "similitud": percentatge
-            })
-            print(f"⚠️ Alerta Plagi: {alumne1} i {alumne2} tenen una similitud del {percentatge}%")
+        # 2. Llegir arxius
+        alumnes_codi = {} 
+        ruta_base = Path(extract_dir)
+        for arxiu_java in ruta_base.rglob('*.java'): 
+            parts_ruta = arxiu_java.relative_to(ruta_base).parts
+            if len(parts_ruta) > 0:
+                nom_alumne = parts_ruta[0]
+                if nom_alumne not in alumnes_codi:
+                    alumnes_codi[nom_alumne] = []
+                try:
+                    with open(arxiu_java, 'r', encoding='utf-8') as f:
+                        alumnes_codi[nom_alumne].append(f.read())
+                except UnicodeDecodeError:
+                    with open(arxiu_java, 'r', encoding='latin-1') as f:
+                        alumnes_codi[nom_alumne].append(f.read())
 
-    db = SessionLocal()
-    try:
-        # 1. Guardem tots els casos de plagi trobats
-        for resultat in resultats_plagi:
-            nou_plagi = ResultatPlagi(
-                tasca_id=task_id,
-                alumne_a=resultat["alumne_A"],
-                alumne_b=resultat["alumne_B"],
-                similitud=resultat["similitud"]
-            )
-            db.add(nou_plagi)
+        codi_per_alumne = {}
         
-        # 2. Actualitzem l'estat de la tasca principal a "completat"
+        # 3. Anàlisi IA i GUARDAR CODI A LA BASE DE DADES
+        for alumne, arxius in alumnes_codi.items():
+            codi_complet = "\n".join(arxius)
+            codi_per_alumne[alumne] = codi_complet
+            
+            # ---> AQUÍ ESTÀ LA MÀGIA QUE FALTAVA <---
+            nou_codi = CodiAlumne(tasca_id=task_id, alumne=alumne, codi=codi_complet)
+            db.add(nou_codi)
+            # ----------------------------------------
+
+            sospites_ia = analitzar_indicis_ia(codi_complet)
+            for motiu in sospites_ia:
+                nova_alerta_ia = AlertaIA(tasca_id=task_id, alumne=alumne, motiu=motiu)
+                db.add(nova_alerta_ia)
+
+        # 4. Anàlisi de Plagi
+        parelles = itertools.combinations(codi_per_alumne.keys(), 2)
+        for alumne1, alumne2 in parelles:
+            similitud = calcular_similitud(codi_per_alumne[alumne1], codi_per_alumne[alumne2])
+            percentatge = round(similitud * 100, 2)
+            if percentatge > 75.0:
+                nou_plagi = ResultatPlagi(
+                    tasca_id=task_id, alumne_a=alumne1, alumne_b=alumne2, similitud=percentatge
+                )
+                db.add(nou_plagi)
+
+        # 5. Finalitzar tasca
         tasca = db.query(AnalisiTasques).filter(AnalisiTasques.id == task_id).first()
         if tasca:
             tasca.estat = "completat"
             
-        db.commit()
-        print(f"[Tasca {task_id}] Resultats guardats a la base de dades correctament.")
+        db.commit() # Guardem absolutament TOT a la base de dades
+        print(f"[Tasca {task_id}] Anàlisi complet i codis guardats a la DB.")
+        
     except Exception as e:
-        print(f"[Tasca {task_id}] Error al guardar a la DB: {e}")
+        print(f"[Tasca {task_id}] Error durant l'anàlisi: {e}")
         db.rollback()
+        tasca_error = db.query(AnalisiTasques).filter(AnalisiTasques.id == task_id).first()
+        if tasca_error:
+            tasca_error.estat = "error"
+            db.commit()
     finally:
         db.close()
-    
-    # 5. Neteja: Esborrem els arxius temporals per no omplir el disc
-    shutil.rmtree(extract_dir)
-    os.remove(file_path)
-    print(f"[Tasca {task_id}] Neteja d'arxius temporals completada.")
+        # Neteja final
+        if os.path.exists(extract_dir):
+            shutil.rmtree(extract_dir)
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
 
 @app.post("/upload-zip/")
@@ -261,30 +300,21 @@ def read_root():
 
 @app.get("/resultats/{task_id}")
 def obtenir_resultats(task_id: str):
-    """
-    Aquest endpoint permet consultar l'estat d'una tasca d'anàlisi 
-    i obtenir-ne els resultats si ja ha acabat.
-    """
     db = SessionLocal()
     try:
-        # 1. Busquem si la tasca existeix a la base de dades
         tasca = db.query(AnalisiTasques).filter(AnalisiTasques.id == task_id).first()
-        
         if not tasca:
-            raise HTTPException(status_code=404, detail="Tasca no trobada. Comprova l'ID.")
+            raise HTTPException(status_code=404, detail="Tasca no trobada.")
         
-        # 2. Si encara està treballant en segon pla, avisem l'usuari
         if tasca.estat == "en proces":
             return {
                 "task_id": tasca.id,
                 "estat": tasca.estat,
-                "missatge": "L'anàlisi encara s'està executant. Si us plau, espera uns instants."
+                "missatge": "L'anàlisi encara s'està executant."
             }
             
-        # 3. Si ja ha acabat, busquem quins alumnes s'han copiat
+        # 1. Recuperem els resultats de plagi
         resultats_bd = db.query(ResultatPlagi).filter(ResultatPlagi.tasca_id == task_id).all()
-        
-        # Formatem les dades perquè siguin fàcils de llegir per al Frontend
         llista_plagi = []
         for r in resultats_bd:
             llista_plagi.append({
@@ -292,15 +322,57 @@ def obtenir_resultats(task_id: str):
                 "alumne_B": r.alumne_b,
                 "similitud": r.similitud
             })
-            
-        # Ordenem la llista de més similitud a menys per veure els casos greus primer
         llista_plagi.sort(key=lambda x: x["similitud"], reverse=True)
+        
+        # 2. NOU: Recuperem les alertes d'IA
+        alertes_ia_bd = db.query(AlertaIA).filter(AlertaIA.tasca_id == task_id).all()
+        llista_ia = []
+        for a in alertes_ia_bd:
+            llista_ia.append({
+                "alumne": a.alumne,
+                "motiu": a.motiu
+            })
             
         return {
             "task_id": tasca.id,
             "estat": tasca.estat,
             "arxiu": tasca.nom_arxiu,
-            "alertes_plagi": llista_plagi
+            "alertes_plagi": llista_plagi,
+            "alertes_ia": llista_ia  # Afegim la nova dada a la resposta
         }
     finally:
-        db.close() # És molt important tancar sempre la connexió
+        db.close()
+
+@app.get("/comparar")
+def obtenir_codi_comparacio(task_id: str, alumne_a: str, alumne_b: str):
+    print("\n--- NOVA PETICIÓ DE COMPARACIÓ ---")
+    db = SessionLocal()
+    try:
+        # 1. Obtenim TOTS els codis que s'han guardat per aquesta tasca
+        tots_els_codis = db.query(CodiAlumne).filter(CodiAlumne.tasca_id == task_id).all()
+        noms_guardats = [c.alumne for c in tots_els_codis]
+        
+        print(f"Buscant Alumne A: '{alumne_a}'")
+        print(f"Buscant Alumne B: '{alumne_b}'")
+        print(f"Noms que hi ha realment guardats a la DB: {noms_guardats}")
+        
+        # Si la llista està buida, vol dir que no s'ha guardat cap codi!
+        if len(noms_guardats) == 0:
+            raise HTTPException(status_code=404, detail="La base de dades està buida per a aquesta tasca. Mira el terminal.")
+
+        # 2. Cerca intel·ligent: ignorem espais al principi o al final usant .strip()
+        codi_a = next((c for c in tots_els_codis if c.alumne.strip() == alumne_a.strip()), None)
+        codi_b = next((c for c in tots_els_codis if c.alumne.strip() == alumne_b.strip()), None)
+
+        if not codi_a or not codi_b:
+            raise HTTPException(status_code=404, detail="Els noms no coincideixen. Mira el terminal.")
+
+        print("Codi trobat amb èxit! Enviant a la web...")
+        return {
+            "alumne_A": codi_a.alumne,
+            "codi_A": codi_a.codi,
+            "alumne_B": codi_b.alumne,
+            "codi_B": codi_b.codi
+        }
+    finally:
+        db.close()
