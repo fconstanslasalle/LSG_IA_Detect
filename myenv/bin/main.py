@@ -1,46 +1,47 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Form
+from fastapi.middleware.cors import CORSMiddleware
 import shutil
 import os
 import uuid
 import zipfile
-import re
 from pathlib import Path
 import javalang
 from difflib import SequenceMatcher
 import itertools
+import re
+
 from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
-app = FastAPI(title="Analitzador de Projectes Java")
-from fastapi.middleware.cors import CORSMiddleware
+app = FastAPI(title="Analitzador de Projectes Multillenguatge")
 
+# Activar CORS per la web
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Permet que qualsevol web es connecti (ideal per proves locals)
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓ DE LA BASE DE DADES ---
-SQLALCHEMY_DATABASE_URL = "sqlite:///./analitzador.db"
+# Carpeta d'arxius temporals
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# connect_args={"check_same_thread": False} és necessari només per a SQLite
+# --- BASE DE DADES ---
+SQLALCHEMY_DATABASE_URL = "sqlite:///./analitzador.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# --- DEFINICIÓ DE LES TAULES ---
 class AnalisiTasques(Base):
     __tablename__ = "tasques_analisi"
-    
-    id = Column(String, primary_key=True, index=True) # Aquest serà el nostre task_id
+    id = Column(String, primary_key=True, index=True)
     nom_arxiu = Column(String)
-    estat = Column(String, default="en proces") # "en proces", "completat", "error"
+    estat = Column(String, default="en proces") 
 
 class ResultatPlagi(Base):
     __tablename__ = "resultats_plagi"
-    
     id = Column(Integer, primary_key=True, index=True)
     tasca_id = Column(String, ForeignKey("tasques_analisi.id"))
     alumne_a = Column(String)
@@ -49,199 +50,149 @@ class ResultatPlagi(Base):
 
 class AlertaIA(Base):
     __tablename__ = "alertes_ia"
-    
     id = Column(Integer, primary_key=True, index=True)
     tasca_id = Column(String, ForeignKey("tasques_analisi.id"))
     alumne = Column(String)
-    motiu = Column(String) # Descripció del per què és sospitós
+    motiu = Column(String)
 
 class CodiAlumne(Base):
     __tablename__ = "codi_alumnes"
-    
     id = Column(Integer, primary_key=True, index=True)
     tasca_id = Column(String, ForeignKey("tasques_analisi.id"))
     alumne = Column(String)
-    codi = Column(String) # Aquesta columna guardarà tot el text sencer
+    codi = Column(String) 
 
-# Creem les taules físicament a l'arxiu SQLite
 Base.metadata.create_all(bind=engine)
 
-# Carpeta on guardarem els ZIPs temporalment
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-
-def extreure_estructura_java(codi_java: str) -> str:
-    """
-    Converteix el codi Java en una seqüència de tokens estructurals,
-    ignorant els noms de variables, cadenes de text i números.
-    """
-    try:
-        tokens = list(javalang.tokenizer.tokenize(codi_java))
-        estructura = []
-        for token in tokens:
-            # Ens quedem només amb paraules clau (if, for, class...), operadors (+, -, =) i separadors ({, }, ;)
-            if isinstance(token, (javalang.tokenizer.Keyword, javalang.tokenizer.Operator, javalang.tokenizer.Separator)):
-                estructura.append(token.value)
-        return "".join(estructura)
-    except Exception:
-        # Si el codi de l'alumne té errors de sintaxi greus que impedeixen llegir-lo
-        return ""
-
+# --- FUNCIONS AUXILIARS ---
 def extreure_zips_recursivament(directori_base: str):
-    """
-    Busca arxius .zip dins de les subcarpetes, els descomprimeix a la mateixa 
-    carpeta on es troben, i esborra el .zip original per evitar bucles.
-    """
     arxius_zip_pendents = True
-    
     while arxius_zip_pendents:
         arxius_zip_pendents = False
-        
-        # Busquem qualsevol .zip que hi hagi dins de qualsevol subcarpeta
         for ruta_zip in Path(directori_base).rglob('*.zip'):
             try:
-                carpeta_desti = ruta_zip.parent # Ho extraiem a la seva pròpia carpeta
+                carpeta_desti = ruta_zip.parent 
                 with zipfile.ZipFile(ruta_zip, 'r') as zip_ref:
                     zip_ref.extractall(carpeta_desti)
-                
-                # Un cop descomprimit, eliminem l'arxiu .zip intern
                 os.remove(ruta_zip)
-                
-                # Com que hem extret coses noves, potser a dins hi havia UN ALTRE zip
                 arxius_zip_pendents = True 
-                
-            except Exception as e:
-                print(f"⚠️ Error al descomprimir l'arxiu intern {ruta_zip.name}: {e}")
+            except Exception:
+                pass
 
-def calcular_similitud(codi1: str, codi2: str) -> float:
-    """Retorna un percentatge de similitud (0.0 a 1.0) entre dos codis."""
-    est1 = extreure_estructura_java(codi1)
-    est2 = extreure_estructura_java(codi2)
-    
-    # Si algun dels codis està buit o no s'ha pogut parsejar, no els podem comparar
-    if not est1 or not est2:
+def extreure_estructura(codi: str, llenguatge: str) -> str:
+    """Tokenitzador que s'adapta al llenguatge triat a la web."""
+    if llenguatge == "Java":
+        try:
+            tokens = list(javalang.tokenizer.tokenize(codi))
+            estructura = [t.value for t in tokens if isinstance(t, (javalang.tokenizer.Keyword, javalang.tokenizer.Operator, javalang.tokenizer.Separator))]
+            return "".join(estructura)
+        except Exception:
+            pass 
+            
+    # PLA B (Universal per PHP i HTML/CSS): Només text estructural
+    text_net = re.sub(r'".*?"|\'.*?\'', '""', codi) 
+    tokens = re.findall(r'[a-zA-Z_]+|[{}();=+\-*/<>]', text_net)
+    return "".join(tokens)
+
+def calcular_similitud(codi1: str, codi2: str, llenguatge: str) -> float:
+    est1 = extreure_estructura(codi1, llenguatge)
+    est2 = extreure_estructura(codi2, llenguatge)
+    if not est1 or not est2: 
         return 0.0
-        
-    # SequenceMatcher compara seqüències i ens dona el ratio de similitud
     return SequenceMatcher(None, est1, est2).ratio()
 
-def analitzar_indicis_ia(codi_java: str) -> list:
-    """
-    Analitza el codi d'un alumne buscant patrons sospitosos que indiquin
-    que ha fet copiar-enganxar directament d'una IA.
-    """
+def analitzar_indicis_ia(codi: str, llenguatge: str) -> list:
     avisos = []
-    
-    # 1. Comentaris residuals de conversa
-    patrons_conversa = [
-        r"here is the (code|solution)",
-        r"certainly!?",
-        r"as an ai (language)? model",
-        r"aquí tienes (el código|la solución)",
-        r"por supuesto",
-        r"claro, aquí",
-        r"```java",  
-        r"espero que (te|esto) sirva"
-    ]
-    
+    # 1. Indicis generals de XatBot per a qualsevol idioma
+    patrons_conversa = [r"here is the", r"certainly!?", r"aquí tienes", r"```(java|php|html|css)"]
     for patro in patrons_conversa:
-        if re.search(patro, codi_java, re.IGNORECASE):
-            avisos.append("S'ha trobat llenguatge conversacional de xat bot als comentaris.")
+        if re.search(patro, codi, re.IGNORECASE):
+            avisos.append("S'ha trobat llenguatge conversacional de xat bot.")
             break 
 
-    # 2. Ús de codi massa avançat pel nivell
-    llibreries_avancades = [
-        "java.util.stream",
-        "java.lang.reflect",
-        "java.util.concurrent",
-        "CompletableFuture",
-        "ExecutorService"
-    ]
-    
-    for lib in llibreries_avancades:
-        if lib in codi_java:
-            avisos.append(f"Ús de llibreries o estructures avançades inusuals: {lib}")
-            
-    # 3. Excés de Javadoc
-    linies = codi_java.split('\n')
-    total_linies = len(linies)
-    javadocs = codi_java.count("@param") + codi_java.count("@return")
-    
-    if total_linies > 0 and (javadocs / total_linies) > 0.05:
-        avisos.append("Densitat inusualment alta de documentació Javadoc.")
+    # 2. Indicis específics per llenguatge
+    if llenguatge == "Java":
+        if "java.util.stream" in codi or "CompletableFuture" in codi:
+            avisos.append("Ús de llibreries Java molt avançades (Streams/Threads).")
+    elif llenguatge == "PHP":
+        if "ReflectionClass" in codi or "PDO" in codi or "namespace" in codi:
+            avisos.append("Ús d'estructures PHP avançades (Objectes/PDO/Namespaces).")
+    elif llenguatge == "HTML/CSS":
+        if "display: grid" in codi or "<section>" in codi:
+            avisos.append("Ús d'etiquetes semàntiques perfectes o CSS Grid avançat.")
 
     return avisos
 
-def processar_arxiu_zip(file_path: str, task_id: str):
-    print(f"[Tasca {task_id}] Iniciant el processament de: {file_path}")
-    
+# --- FUNCIO PRINCIPAL (SEGON PLA) ---
+def processar_arxiu_zip(file_path: str, task_id: str, llenguatge: str):
+    print(f"[Tasca {task_id}] Iniciant anàlisi de {llenguatge}")
     extract_dir = os.path.join(UPLOAD_DIR, f"extracted_{task_id}")
     os.makedirs(extract_dir, exist_ok=True)
-    
-    db = SessionLocal() # Obrim la base de dades al principi
+    db = SessionLocal() 
     
     try:
         # 1. Descomprimir
         with zipfile.ZipFile(file_path, 'r') as zip_ref:
             zip_ref.extractall(extract_dir)
-            
         extreure_zips_recursivament(extract_dir)
         
-        # 2. Llegir arxius
+        # 2. Buscar arxius segons l'idioma seleccionat
         alumnes_codi = {} 
         ruta_base = Path(extract_dir)
-        for arxiu_java in ruta_base.rglob('*.java'): 
-            parts_ruta = arxiu_java.relative_to(ruta_base).parts
-            if len(parts_ruta) > 0:
-                nom_alumne = parts_ruta[0]
-                if nom_alumne not in alumnes_codi:
-                    alumnes_codi[nom_alumne] = []
-                try:
-                    with open(arxiu_java, 'r', encoding='utf-8') as f:
-                        alumnes_codi[nom_alumne].append(f.read())
-                except UnicodeDecodeError:
-                    with open(arxiu_java, 'r', encoding='latin-1') as f:
-                        alumnes_codi[nom_alumne].append(f.read())
+        
+        extensions = []
+        if llenguatge == "Java": extensions = ['*.java']
+        elif llenguatge == "PHP": extensions = ['*.php']
+        elif llenguatge == "HTML/CSS": extensions = ['*.html', '*.css']
+            
+        for ext in extensions:
+            for arxiu in ruta_base.rglob(ext): 
+                if not arxiu.is_file():
+                    continue  # Si és una carpeta, la ignorem i passem al següent
+                parts_ruta = arxiu.relative_to(ruta_base).parts
+                if len(parts_ruta) > 0:
+                    nom_alumne = parts_ruta[0]
+                    if nom_alumne not in alumnes_codi:
+                        alumnes_codi[nom_alumne] = []
+                    try:
+                        with open(arxiu, 'r', encoding='utf-8') as f:
+                            alumnes_codi[nom_alumne].append(f.read())
+                    except UnicodeDecodeError:
+                        with open(arxiu, 'r', encoding='latin-1') as f:
+                            alumnes_codi[nom_alumne].append(f.read())
 
         codi_per_alumne = {}
         
-        # 3. Anàlisi IA i GUARDAR CODI A LA BASE DE DADES
+        # 3. Guardar codi i buscar IA
         for alumne, arxius in alumnes_codi.items():
             codi_complet = "\n".join(arxius)
             codi_per_alumne[alumne] = codi_complet
             
-            # ---> AQUÍ ESTÀ LA MÀGIA QUE FALTAVA <---
             nou_codi = CodiAlumne(tasca_id=task_id, alumne=alumne, codi=codi_complet)
             db.add(nou_codi)
-            # ----------------------------------------
 
-            sospites_ia = analitzar_indicis_ia(codi_complet)
+            sospites_ia = analitzar_indicis_ia(codi_complet, llenguatge)
             for motiu in sospites_ia:
                 nova_alerta_ia = AlertaIA(tasca_id=task_id, alumne=alumne, motiu=motiu)
                 db.add(nova_alerta_ia)
 
-        # 4. Anàlisi de Plagi
+        # 4. Calcular Plagi
         parelles = itertools.combinations(codi_per_alumne.keys(), 2)
         for alumne1, alumne2 in parelles:
-            similitud = calcular_similitud(codi_per_alumne[alumne1], codi_per_alumne[alumne2])
+            similitud = calcular_similitud(codi_per_alumne[alumne1], codi_per_alumne[alumne2], llenguatge)
             percentatge = round(similitud * 100, 2)
             if percentatge > 75.0:
-                nou_plagi = ResultatPlagi(
-                    tasca_id=task_id, alumne_a=alumne1, alumne_b=alumne2, similitud=percentatge
-                )
+                nou_plagi = ResultatPlagi(tasca_id=task_id, alumne_a=alumne1, alumne_b=alumne2, similitud=percentatge)
                 db.add(nou_plagi)
 
         # 5. Finalitzar tasca
         tasca = db.query(AnalisiTasques).filter(AnalisiTasques.id == task_id).first()
-        if tasca:
-            tasca.estat = "completat"
-            
-        db.commit() # Guardem absolutament TOT a la base de dades
-        print(f"[Tasca {task_id}] Anàlisi complet i codis guardats a la DB.")
+        if tasca: tasca.estat = "completat"
+        db.commit() 
+        print(f"[Tasca {task_id}] Anàlisi complet de {llenguatge}.")
         
     except Exception as e:
-        print(f"[Tasca {task_id}] Error durant l'anàlisi: {e}")
+        print(f"[Tasca {task_id}] Error: {e}")
         db.rollback()
         tasca_error = db.query(AnalisiTasques).filter(AnalisiTasques.id == task_id).first()
         if tasca_error:
@@ -249,130 +200,72 @@ def processar_arxiu_zip(file_path: str, task_id: str):
             db.commit()
     finally:
         db.close()
-        # Neteja final
-        if os.path.exists(extract_dir):
-            shutil.rmtree(extract_dir)
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        if os.path.exists(extract_dir): shutil.rmtree(extract_dir)
+        if os.path.exists(file_path): os.remove(file_path)
 
-
+# --- ENDPOINTS (RUTES API) ---
 @app.post("/upload-zip/")
-# Guardem la tasca a la base de dades com a "en procés"
-
-async def upload_zip(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    # 1. Validació: Comprovar que és un arxiu .zip
+async def upload_zip(
+    background_tasks: BackgroundTasks, 
+    file: UploadFile = File(...),
+    llenguatge: str = Form(...) # Rebem l'idioma del Frontend
+):
     if not file.filename.endswith('.zip'):
-        raise HTTPException(status_code=400, detail="L'arxiu ha de ser un .zip")
+        raise HTTPException(status_code=400, detail="Ha de ser un .zip")
 
-    # 2. Generar un ID únic per aquesta tasca/pujada
     task_id = str(uuid.uuid4())
     file_path = os.path.join(UPLOAD_DIR, f"{task_id}_{file.filename}")
 
-    # 3. Guardar l'arxiu al disc dur del servidor
     try:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al guardar l'arxiu: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     finally:
         file.file.close()
-    
+
     db = SessionLocal()
     nova_tasca = AnalisiTasques(id=task_id, nom_arxiu=file.filename, estat="en proces")
     db.add(nova_tasca)
     db.commit()
     db.close()
 
-    # 4. Enviar la tasca d'anàlisi a segon pla
-    background_tasks.add_task(processar_arxiu_zip, file_path, task_id)
-
-    # 5. Retornar una resposta ràpida al Frontend
-    return {
-        "missatge": "Arxiu rebut correctament. L'anàlisi ha començat.",
-        "task_id": task_id,
-        "arxiu": file.filename
-    }
-
-# Endpoint de prova per comprovar que l'API funciona
-@app.get("/")
-def read_root():
-    return {"Estat": "L'API està funcionant correctament"}
+    # Enviem l'arxiu i l'idioma a processar
+    background_tasks.add_task(processar_arxiu_zip, file_path, task_id, llenguatge)
+    return {"missatge": "Rebut.", "task_id": task_id}
 
 @app.get("/resultats/{task_id}")
 def obtenir_resultats(task_id: str):
     db = SessionLocal()
     try:
         tasca = db.query(AnalisiTasques).filter(AnalisiTasques.id == task_id).first()
-        if not tasca:
-            raise HTTPException(status_code=404, detail="Tasca no trobada.")
-        
-        if tasca.estat == "en proces":
-            return {
-                "task_id": tasca.id,
-                "estat": tasca.estat,
-                "missatge": "L'anàlisi encara s'està executant."
-            }
+        if not tasca: raise HTTPException(status_code=404, detail="Tasca no trobada.")
+        if tasca.estat == "en proces" or tasca.estat == "error":
+            return {"task_id": tasca.id, "estat": tasca.estat}
             
-        # 1. Recuperem els resultats de plagi
         resultats_bd = db.query(ResultatPlagi).filter(ResultatPlagi.tasca_id == task_id).all()
-        llista_plagi = []
-        for r in resultats_bd:
-            llista_plagi.append({
-                "alumne_A": r.alumne_a,
-                "alumne_B": r.alumne_b,
-                "similitud": r.similitud
-            })
+        llista_plagi = [{"alumne_A": r.alumne_a, "alumne_B": r.alumne_b, "similitud": r.similitud} for r in resultats_bd]
         llista_plagi.sort(key=lambda x: x["similitud"], reverse=True)
         
-        # 2. NOU: Recuperem les alertes d'IA
         alertes_ia_bd = db.query(AlertaIA).filter(AlertaIA.tasca_id == task_id).all()
-        llista_ia = []
-        for a in alertes_ia_bd:
-            llista_ia.append({
-                "alumne": a.alumne,
-                "motiu": a.motiu
-            })
+        llista_ia = [{"alumne": a.alumne, "motiu": a.motiu} for a in alertes_ia_bd]
             
-        return {
-            "task_id": tasca.id,
-            "estat": tasca.estat,
-            "arxiu": tasca.nom_arxiu,
-            "alertes_plagi": llista_plagi,
-            "alertes_ia": llista_ia  # Afegim la nova dada a la resposta
-        }
+        return {"task_id": tasca.id, "estat": tasca.estat, "arxiu": tasca.nom_arxiu, "alertes_plagi": llista_plagi, "alertes_ia": llista_ia}
     finally:
         db.close()
 
 @app.get("/comparar")
 def obtenir_codi_comparacio(task_id: str, alumne_a: str, alumne_b: str):
-    print("\n--- NOVA PETICIÓ DE COMPARACIÓ ---")
     db = SessionLocal()
     try:
-        # 1. Obtenim TOTS els codis que s'han guardat per aquesta tasca
         tots_els_codis = db.query(CodiAlumne).filter(CodiAlumne.tasca_id == task_id).all()
-        noms_guardats = [c.alumne for c in tots_els_codis]
-        
-        print(f"Buscant Alumne A: '{alumne_a}'")
-        print(f"Buscant Alumne B: '{alumne_b}'")
-        print(f"Noms que hi ha realment guardats a la DB: {noms_guardats}")
-        
-        # Si la llista està buida, vol dir que no s'ha guardat cap codi!
-        if len(noms_guardats) == 0:
-            raise HTTPException(status_code=404, detail="La base de dades està buida per a aquesta tasca. Mira el terminal.")
+        if len(tots_els_codis) == 0: raise HTTPException(status_code=404, detail="DB buida.")
 
-        # 2. Cerca intel·ligent: ignorem espais al principi o al final usant .strip()
         codi_a = next((c for c in tots_els_codis if c.alumne.strip() == alumne_a.strip()), None)
         codi_b = next((c for c in tots_els_codis if c.alumne.strip() == alumne_b.strip()), None)
 
-        if not codi_a or not codi_b:
-            raise HTTPException(status_code=404, detail="Els noms no coincideixen. Mira el terminal.")
+        if not codi_a or not codi_b: raise HTTPException(status_code=404, detail="Noms no coincideixen.")
 
-        print("Codi trobat amb èxit! Enviant a la web...")
-        return {
-            "alumne_A": codi_a.alumne,
-            "codi_A": codi_a.codi,
-            "alumne_B": codi_b.alumne,
-            "codi_B": codi_b.codi
-        }
+        return {"alumne_A": codi_a.alumne, "codi_A": codi_a.codi, "alumne_B": codi_b.alumne, "codi_B": codi_b.codi}
     finally:
         db.close()

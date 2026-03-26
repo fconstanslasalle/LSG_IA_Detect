@@ -132,24 +132,27 @@
 
             const formData = new FormData();
             formData.append("file", inputArxiu.files[0]);
+            
+            // AFEGIM EL LLENGUATGE AL PAQUET DE DADES
+            const llenguatgeTriat = document.getElementById('llenguatgeSelect').value;
+            formData.append("llenguatge", llenguatgeTriat);
 
             document.getElementById('estatDiv').classList.remove('hidden');
             document.getElementById('resultatsDiv').classList.add('hidden');
-            document.getElementById('textEstat').innerText = "Pujant l'arxiu i inicialitzant l'anàlisi...";
+            document.getElementById('textEstat').innerText = `Pujant l'arxiu i preparant l'anàlisi per a ${llenguatgeTriat}...`;
 
             try {
                 const resposta = await fetch(`${API_URL}/upload-zip/`, { method: 'POST', body: formData });
                 const dades = await resposta.json();
 
                 if (resposta.ok) {
-                    currentTaskId = dades.task_id; // Guardem l'ID per usar-lo després
-                    document.getElementById('textEstat').innerText = "Analitzant codi estructural (Plagi) i heurístiques d'IA...";
+                    currentTaskId = dades.task_id;
+                    document.getElementById('textEstat').innerText = `Analitzant codi estructural i heurístiques d'IA en ${llenguatgeTriat}...`;
                     intervalConsulta = setInterval(() => consultarResultats(currentTaskId), 2500);
                 } else {
                     document.getElementById('textEstat').innerText = `Error: ${dades.detail}`;
                 }
-            } catch (error) { document.getElementById('textEstat').innerText = "Error de connexió amb el servidor."; }
-        }
+            } catch (error) { document.getElementById('textEstat').innerText = "Error de connexió amb el servidor."; }        }
 
         async function consultarResultats(taskId) {
             try {
